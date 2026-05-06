@@ -1,0 +1,19 @@
+{
+  "name": "meml",
+  "version": "0.0.1",
+  "description": "Personal memory CLI - agent-callable local memory layer",
+  "type": "module",
+  "bin": {
+    "meml": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "lint": "oxlint .",
+    "format": "oxfmt ."
+  },
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
