@@ -1,6 +1,6 @@
 # meml
 
-Personal memory CLI — RSS / GitHub / Slack 等のソースから個人の input を local SQLite に集約し、CLI として agent (Claude / Cursor / shell skill) から呼び出せる memory layer。
+Personal memory CLI — RSS / GitHub / Slack / local file 等のソースから個人の input を local DuckDB に集約し、agent (Claude / Cursor / shell skill) から **raw SQL で直接 query できる** memory layer。
 
 ## ディレクトリ構造
 
@@ -9,9 +9,10 @@ meml/
 ├── src/
 │   ├── index.ts        エントリポイント (CLI parser)
 │   ├── commands/       subcommand 実装
-│   ├── plugins/        source plugin (rss, ...)
-│   ├── storage/        SQLite + sqlite-vec
+│   ├── plugins/        source plugin (md, rss, ...)
+│   ├── storage/        DuckDB + vss extension
 │   └── embedding/      embedding engine
+├── .agent/prd/         feature ごとの PRD
 ├── package.json
 ├── tsconfig.json
 ├── .mise.toml
@@ -23,6 +24,7 @@ meml/
 ```bash
 mise install         # Bun を install
 bun install          # 依存解決
+llama-server --embeddings -hf <bge-m3 GGUF>:Q8_0 --port 8080  # embedding server を別 shell で常駐
 bun run dev          # 開発実行
 bun test             # テスト
 bun run lint         # oxlint
@@ -31,10 +33,10 @@ bun run format       # oxfmt
 
 ## 技術スタック
 
-- **Runtime**: Bun (built-in TS / sqlite / test)
+- **Runtime**: Bun (built-in TS / test)
 - **Lang**: TypeScript
-- **DB**: `bun:sqlite` + sqlite-vec extension
-- **Embedding**: fastembed-node (default) / OpenAI API (opt-in)
+- **DB**: DuckDB + vss extension (`@duckdb/node-api`)
+- **Embedding**: llama.cpp (llama-server) + bge-m3 (default, 1024 dim / 多言語)。engine は `src/embedding` で interface 化し差し替え可能 (Ollama / OpenAI 等)
 - **CLI parser**: commander (or Bun built-in)
 - **RSS**: rss-parser
 - **Lint**: oxlint
@@ -44,71 +46,33 @@ bun run format       # oxfmt
 ## 設計思想
 
 - **Source-agnostic schema**: source 列で plugin を区別、metadata に固有情報を逃がす
-- **Local-first**: vault folder は user-owned 実ファイル
+- **Local-first**: vault folder は user-owned 実ファイル、meml は file 本体を所有しない
 - **Unix-native**: CLI + JSON output、cron で fetch、shell skill / Bash tool から叩ける
+- **Raw SQL as the only agent interface**: ORM / query builder を入れない。agent は `meml schema` + `meml sql` で直接 SQL を書く。convenience wrapper (`search` / `recent` / `get`) は持たない
 - **Build wide as tool, productize narrow**: 個人 dogfood で広く、製品化は narrow に絞る
 
-## CLI 設計
-
-namespace パターン (`gh repo` / `gh pr` 流儀):
+## CLI
 
 ```
-meml init [--vault PATH]
+meml init [--vault PATH]                       # vault / DB / extension 初期化 (embedding server 接続も check)
+meml add <path> [--title TITLE] [--dry-run]    # file ingest (Phase 0 では .md のみ)
+meml remove <path>                             # 誤 ingest / orphan の削除
 
-# Source-specific (Phase 0 = rss のみ)
-meml rss add <url>
-meml rss list [--json]
-meml rss remove <id>
-meml rss fetch [--feed ID]
+meml sql "<query>" [--json|--csv|--table]      # read-only raw SQL (- で stdin)
+meml schema [--json]                           # schema export
 
-# Cross-source query (source-agnostic)
-meml search <query> [--source S] [--since 7d] [--limit N] [--json]
-meml recent [--days N] [--unread] [--source S] [--json]
-meml get <id> [--json]
-meml mark-read <id>
-meml mark-summarized <ids...>
-
-# 全 source 一括 fetch (cron 用)
-meml fetch [--source S]
+# Plugin (Phase 3+)
+meml rss add/list/remove/fetch <url>
+meml fetch [--source S]                        # 全 source 一括 fetch (cron 用)
 ```
 
-## データモデル
-
-```sql
-CREATE TABLE memory (
-  id            TEXT PRIMARY KEY,
-  source        TEXT NOT NULL,           -- "rss" | "github" | ...
-  url           TEXT,
-  title         TEXT,
-  content       TEXT,
-  metadata      TEXT,                    -- JSON: source 固有情報
-  created_at    TIMESTAMP NOT NULL,
-  read_at       TIMESTAMP,
-  summarized_at TIMESTAMP,
-  UNIQUE(source, url)
-);
-
-CREATE TABLE memory_chunks (
-  id          TEXT PRIMARY KEY,
-  memory_id   TEXT NOT NULL REFERENCES memory(id),
-  chunk_index INTEGER NOT NULL,
-  content     TEXT NOT NULL,
-  embedding   BLOB
-);
-```
-
-## Phase plan
-
-- **Phase 0**: RSS plugin のみ (今週末)
-- **Phase 1**: GitHub plugin (PR / issue / commit)
-- **Phase 2**: Slack plugin (DM / mention / post)
-- **Phase 3**: Calendar / Notes plugin (URL なき source、`source_id` 列追加検討)
+- `meml sql` は **read-only**（単一 statement + SELECT/WITH allowlist、COPY/ATTACH/INSTALL/LOAD 等も拒否）。`-` で stdin から SQL 可
+- 出力 default は stdout の TTY 判定: 非 TTY (pipe / agent) なら JSON、TTY なら table（`--json`/`--csv`/`--table` or `MEML_OUTPUT=json` で固定）。失敗時は stderr に固定 shape の構造化エラー `{"error":{"code","message","hint"}}`
+- semantic search は SQL 内の `meml_embed('text')` で表現（CLI 側 preprocessor が literal を embed して bind 置換）
+- Default vault: `~/.meml/`、DB file: `<vault>/meml.duckdb`
+- データモデル (schema) / データ取り込み方針は feature ごとの PRD / DD を正本とする。schema は `meml schema` で動的に引ける
 
 ## 関連ドキュメント
 
-設計議論の経緯: [wwwyo/me — ideas/meml.md](https://github.com/wwwyo/me/blob/main/ideas/meml.md)
-
-## コミュニケーション方針
-
-- 忖度しない。問題点やリスクがあれば率直に指摘する
-- コメントは「なぜ」を説明する場合にのみ書く
+- 設計議論の経緯: [wwwyo/me — wiki/syntheses/data-platform-architecture.md](https://github.com/wwwyo/me/blob/main/wiki/syntheses/data-platform-architecture.md)
+- 設計議論の memo: [wwwyo/me — ideas/meml.md](https://github.com/wwwyo/me/blob/main/ideas/meml.md)
