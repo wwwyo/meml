@@ -87,8 +87,9 @@ export async function upsertMemory(
   return memoryId;
 }
 
-// Delete the memory row and its chunks. DuckDB FKs lack ON DELETE CASCADE, so chunks are
-// deleted first (FK is RESTRICT). Wrapped in a transaction by the caller. Returns id, or null.
+// Delete the memory row and its chunks. memory_id is a logical (app-enforced) reference, not a
+// DuckDB FK, so the cascade is explicit here. Wrapped in a transaction by the caller. Returns id,
+// or null if not found.
 export async function removeBySourceId(
   conn: DuckDBConnection,
   source: string,

@@ -29,7 +29,9 @@ export async function openDb(vault: string, mode: Mode): Promise<Db> {
     throw new MemlError("IO_ERROR", `failed to open DB at ${path}: ${(e as Error).message}`);
   }
   const conn = await instance.connect();
-  await loadVss(conn);
+  // Only the read-write path (init / add / remove) installs the extension; read-only just loads
+  // the already-cached one, keeping the agent query path free of network/install side effects.
+  await loadVss(conn, mode === "read-write");
   if (mode === "read-only") {
     // Engine-level lockdown for the agent-facing `meml sql` surface: blocks file IO
     // (read_csv/read_text/glob/COPY TO), ATTACH, INSTALL/LOAD, and network. The keyword
@@ -47,15 +49,17 @@ export async function openDb(vault: string, mode: Mode): Promise<Db> {
   };
 }
 
-async function loadVss(conn: DuckDBConnection): Promise<void> {
+async function loadVss(conn: DuckDBConnection, install: boolean): Promise<void> {
   try {
-    await conn.run("INSTALL vss");
+    if (install) await conn.run("INSTALL vss");
     await conn.run("LOAD vss");
   } catch (e) {
     throw new MemlError(
       "IO_ERROR",
       `failed to load DuckDB vss extension: ${(e as Error).message}`,
-      "Ensure network access for the first INSTALL vss, or that the extension is already cached.",
+      install
+        ? "Ensure network access for the first INSTALL vss, or that the extension is already cached."
+        : "Run `meml init` to install the vss extension.",
     );
   }
 }

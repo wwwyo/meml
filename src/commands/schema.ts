@@ -85,7 +85,10 @@ export async function cmdSchema(opts: SchemaOptions): Promise<void> {
 
     const schema = { tables, functions: FUNCTIONS, embedding: { model: EMBED_MODEL, dim: EMBED_DIM } };
 
-    if (opts.json) {
+    // Honor the global output contract: JSON when piped (non-TTY / agent), human table on a TTY.
+    // --json forces JSON.
+    const asJson = opts.json || !process.stdout.isTTY;
+    if (asJson) {
       process.stdout.write(JSON.stringify(schema, null, process.stdout.isTTY ? 2 : 0) + "\n");
     } else {
       process.stdout.write(renderHuman(tables) + "\n");
