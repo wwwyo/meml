@@ -10,6 +10,10 @@ export function chunkText(
   if (text.trim().length === 0) return [];
   if (text.length <= maxChars) return [text];
 
+  // Clamp overlap so each window advances by at least half of maxChars, preventing
+  // pathological quadratic re-chunking when a caller passes overlap close to maxChars.
+  overlap = Math.min(overlap, Math.floor(maxChars / 2));
+
   const chunks: string[] = [];
   let start = 0;
   while (start < text.length) {

@@ -1,4 +1,5 @@
 import { MemlError } from "../errors.ts";
+import { dollarQuoteEnd } from "./scan.ts";
 
 // Statement-level keywords that imply a write or a side effect (file IO, extension load,
 // attach, settings). The read_only connection is the hard backstop; this denylist is
@@ -95,6 +96,14 @@ export function stripLiteralsAndComments(sql: string): string {
       }
       out += '"_"';
       continue;
+    }
+    if (c === "$") {
+      const dq = dollarQuoteEnd(sql, i);
+      if (dq !== null) {
+        out += "''";
+        i = dq;
+        continue;
+      }
     }
     out += c;
     i++;

@@ -37,7 +37,9 @@ export async function upsertMemory(
     INSERT INTO memory
       (id, source, source_id, url, title, content, author, tags, sourced_at, metadata, created_at, updated_at)
     VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, make_timestamp($9), $10::JSON, make_timestamp($11), make_timestamp($12))
+      ($1, $2, $3, $4, $5, $6, $7, $8,
+       make_timestamp($9) AT TIME ZONE 'UTC', $10::JSON,
+       make_timestamp($11) AT TIME ZONE 'UTC', make_timestamp($12) AT TIME ZONE 'UTC')
     ON CONFLICT (source, source_id) DO UPDATE SET
       url        = excluded.url,
       title      = excluded.title,

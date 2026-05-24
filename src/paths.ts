@@ -11,7 +11,8 @@ function expandHome(p: string): string {
 
 function hasControlChar(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
-    if (s.charCodeAt(i) < 0x20) return true;
+    const code = s.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
   }
   return false;
 }

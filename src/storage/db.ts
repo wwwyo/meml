@@ -30,6 +30,14 @@ export async function openDb(vault: string, mode: Mode): Promise<Db> {
   }
   const conn = await instance.connect();
   await loadVss(conn);
+  if (mode === "read-only") {
+    // Engine-level lockdown for the agent-facing `meml sql` surface: blocks file IO
+    // (read_csv/read_text/glob/COPY TO), ATTACH, INSTALL/LOAD, and network. The keyword
+    // allowlist cannot enumerate DuckDB's open-ended table functions (e.g. query()), so this
+    // is the real backstop. Must run AFTER LOAD vss (loading an extension is external access);
+    // the flag is one-way (cannot be re-enabled) for the lifetime of the connection.
+    await conn.run("SET enable_external_access = false");
+  }
   return {
     conn,
     close() {

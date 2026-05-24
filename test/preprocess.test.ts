@@ -31,6 +31,18 @@ describe("preprocessEmbed", () => {
     expect(sql).toBe("SELECT 'meml_embed(''x'')' AS lit");
   });
 
+  test("ignores meml_embed inside a dollar-quoted string", () => {
+    const { sql, params } = preprocessEmbed("SELECT $$ meml_embed('x') $$ AS lit");
+    expect(params).toEqual([]);
+    expect(sql).toBe("SELECT $$ meml_embed('x') $$ AS lit");
+  });
+
+  test("honors a custom param name prefix (collision avoidance)", () => {
+    const { sql, params } = preprocessEmbed("SELECT meml_embed('q')", "qABC123");
+    expect(params).toEqual([{ name: "qABC123_1", text: "q" }]);
+    expect(sql).toBe("SELECT $qABC123_1");
+  });
+
   test("is case-insensitive and tolerates whitespace", () => {
     const { params } = preprocessEmbed("SELECT MEML_EMBED(  'q'  )");
     expect(params).toEqual([{ name: "qvec_1", text: "q" }]);

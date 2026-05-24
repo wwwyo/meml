@@ -10,6 +10,8 @@ const allowed = [
   "SELECT 'how to DROP a table' AS note", // keyword inside string literal
   "SELECT * -- a comment mentioning DELETE\nFROM memory",
   "SELECT \"updated\" FROM memory", // keyword-ish quoted identifier neutralized
+  "SELECT $$how to DROP a table$$ AS note", // keyword inside dollar-quoted string
+  "SELECT $tag$has DELETE keyword$tag$ AS note", // tagged dollar-quote
 ];
 
 const denied = [
@@ -20,6 +22,8 @@ const denied = [
   ["CREATE TABLE t (x INT)", "SQL_FORBIDDEN"],
   ["SELECT 1; DROP TABLE memory", "SQL_FORBIDDEN"], // multiple statements
   ["SELECT * FROM memory; COPY memory TO '/tmp/x.csv'", "SQL_FORBIDDEN"],
+  // dollar-quote must not hide a second statement from the multi-statement check
+  ["SELECT $a$ ' $a$ AS z ; COPY (SELECT 1) TO '/tmp/x'", "SQL_FORBIDDEN"],
   ["ATTACH 'other.db'", "SQL_FORBIDDEN"],
   ["INSTALL vss", "SQL_FORBIDDEN"],
   ["LOAD vss", "SQL_FORBIDDEN"],

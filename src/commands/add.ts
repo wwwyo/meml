@@ -48,6 +48,17 @@ export async function cmdAdd(opts: AddOptions): Promise<void> {
   }
 
   const chunks = chunkText(memory.content);
+  if (chunks.length === 0) {
+    process.stderr.write(
+      JSON.stringify({
+        warning: {
+          code: "NO_CHUNKS",
+          message: `${opts.path} has no embeddable content; it will be stored but not findable via semantic search`,
+          hint: "Structured queries (title / metadata) still work; add body text to make it searchable.",
+        },
+      }) + "\n",
+    );
+  }
   const sourcedAtIso = memory.sourcedAtMs !== null ? new Date(memory.sourcedAtMs).toISOString() : null;
 
   if (opts.dryRun) {

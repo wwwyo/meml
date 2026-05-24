@@ -1,4 +1,5 @@
 import { MemlError } from "../errors.ts";
+import { dollarQuoteEnd } from "./scan.ts";
 
 export interface EmbedParam {
   name: string;
@@ -14,7 +15,9 @@ export interface PreprocessResult {
 // literals to embed once on the CLI side. This keeps embedding to a single HTTP call per
 // distinct literal and avoids per-row UDF evaluation / read-only-connection conflicts.
 // Only string-literal arguments are supported (column args are out of scope by design).
-export function preprocessEmbed(sql: string): PreprocessResult {
+// `namePrefix` names the generated params (`<prefix>_<n>`); callers pass a per-invocation
+// unique prefix so a user-written `$qvec_1` can't collide with a generated bind param.
+export function preprocessEmbed(sql: string, namePrefix = "qvec"): PreprocessResult {
   let out = "";
   let i = 0;
   const n = sql.length;
@@ -49,6 +52,15 @@ export function preprocessEmbed(sql: string): PreprocessResult {
       i = lit.end;
       continue;
     }
+    // copy dollar-quoted strings verbatim (DuckDB $$...$$ / $tag$...$tag$)
+    if (c === "$") {
+      const dq = dollarQuoteEnd(sql, i);
+      if (dq !== null) {
+        out += sql.slice(i, dq);
+        i = dq;
+        continue;
+      }
+    }
 
     // match meml_embed( ... ) as a whole identifier
     if ((c === "m" || c === "M") && matchesKeyword(sql, i, "meml_embed")) {
@@ -76,7 +88,7 @@ export function preprocessEmbed(sql: string): PreprocessResult {
         let name = byText.get(text);
         if (!name) {
           counter++;
-          name = `qvec_${counter}`;
+          name = `${namePrefix}_${counter}`;
           byText.set(text, name);
           params.push({ name, text });
         }

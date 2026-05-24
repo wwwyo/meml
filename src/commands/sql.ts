@@ -23,7 +23,9 @@ export async function cmdSql(opts: SqlOptions): Promise<void> {
     throw new MemlError("SQL_ERROR", "empty SQL", "Provide a query argument or pipe SQL via `-`.");
   }
 
-  const { sql, params } = preprocessEmbed(raw);
+  // Unique per-invocation prefix so a user-written `$qvec_1` cannot collide with our bind params.
+  const prefix = `q${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
+  const { sql, params } = preprocessEmbed(raw, prefix);
   assertReadOnlySql(sql);
 
   const vectors = params.length > 0 ? await getEngine().embed(params.map((p) => p.text)) : [];
