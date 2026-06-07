@@ -31,6 +31,16 @@ async function appliedVersions(): Promise<string[]> {
   return r.getRowObjectsJson().map((x) => String(x.version));
 }
 
+describe("migrations registry", () => {
+  test("is auto-collected from .sql files, ordered, and includes the baseline", () => {
+    expect(MIGRATIONS.length).toBeGreaterThan(0);
+    expect(MIGRATIONS[0]!.version).toBe("0001_init");
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect([...versions].sort()).toEqual(versions); // collected in sorted (apply) order
+    expect(MIGRATIONS.every((m) => m.sql.trim().length > 0)).toBe(true);
+  });
+});
+
 describe("migrate", () => {
   test("creates baseline tables and records the applied version", async () => {
     await migrate(db.conn);
