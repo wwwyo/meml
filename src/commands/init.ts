@@ -10,7 +10,7 @@ export interface InitOptions {
   format: OutputFormat;
 }
 
-// Create vault (0700) + DB + vss + schema (idempotent), then probe the embedding server.
+// Create vault (0700) + DB + schema (idempotent), then probe the embedding server.
 // A down server is reported (with a hint) but does not fail init — `add` enforces it at use.
 export async function cmdInit(opts: InitOptions): Promise<void> {
   const vault = resolveVault(opts.vault);

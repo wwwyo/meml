@@ -10,7 +10,7 @@ meml/
 │   ├── index.ts        エントリポイント (CLI parser)
 │   ├── commands/       subcommand 実装
 │   ├── plugins/        source plugin (md, rss, ...)
-│   ├── storage/        DuckDB + vss、schema migration (migrations/*.sql)
+│   ├── storage/        DuckDB、schema migration (migrations/*.sql)
 │   └── embedding/      embedding engine
 ├── .agent/prd/         feature ごとの PRD
 ├── package.json
@@ -35,7 +35,7 @@ bun run format       # oxfmt
 
 - **Runtime**: Bun (built-in TS / test)
 - **Lang**: TypeScript
-- **DB**: DuckDB + vss extension (`@duckdb/node-api`)
+- **DB**: DuckDB (`@duckdb/node-api`)。array distance functions (cosine / euclidean / dot) は DuckDB core に組込済、vss 拡張は未使用
 - **Embedding**: llama.cpp (llama-server) + bge-m3 (default, 1024 dim / 多言語)。engine は `src/embedding` で interface 化し差し替え可能 (Ollama / OpenAI 等)
 - **CLI parser**: commander (or Bun built-in)
 - **RSS**: rss-parser

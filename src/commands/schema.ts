@@ -15,25 +15,26 @@ interface TableSchema {
 
 const TABLES = ["memory", "memory_chunks"];
 
-// vss functions + the meml_embed preprocessor pseudo-function. The latter is not a real DuckDB
-// function — it only works inside `meml sql`, which embeds the literal and binds a query vector.
+// DuckDB core array distance functions + the meml_embed preprocessor pseudo-function.
+// meml_embed is not a real DuckDB function — it only works inside `meml sql`, which embeds the
+// literal and binds a query vector.
 const FUNCTIONS = [
   {
     name: "array_cosine_similarity",
     signature: `array_cosine_similarity(a FLOAT[${EMBED_DIM}], b FLOAT[${EMBED_DIM}]) -> FLOAT`,
-    source: "vss",
+    source: "duckdb-core",
     note: "Cosine similarity in [-1, 1]; higher is closer. Both args must be same-dim ARRAYs.",
   },
   {
     name: "array_distance",
     signature: `array_distance(a FLOAT[${EMBED_DIM}], b FLOAT[${EMBED_DIM}]) -> FLOAT`,
-    source: "vss",
+    source: "duckdb-core",
     note: "Euclidean (L2) distance; lower is closer.",
   },
   {
     name: "array_inner_product",
     signature: `array_inner_product(a FLOAT[${EMBED_DIM}], b FLOAT[${EMBED_DIM}]) -> FLOAT`,
-    source: "vss",
+    source: "duckdb-core",
     note: "Dot product.",
   },
   {
