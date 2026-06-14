@@ -1,0 +1,4 @@
+[install]
+exact = true
+# Supply-chain cooldown: only install package versions published >= 7 days ago.
+minimumReleaseAge = 604800
