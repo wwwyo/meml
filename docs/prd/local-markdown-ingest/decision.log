@@ -1,0 +1,187 @@
+# decision.log — local-markdown-ingest
+
+実装時に判断したこと・dd/prd に明示されていない設計判断・考慮したトレードオフの記録。
+正本は [prd.md](./prd.md) / [dd.md](./dd.md)。ここは「実装で初めて確定した/変えた」差分を残す。
+
+---
+
+## 0. schema migration runner を導入（軽量 raw-SQL、Drizzle 不採用）
+
+当初 `migrate.ts` は `CREATE TABLE IF NOT EXISTS` を直書きする version 管理なしの runner だった
+（review panel §8 で懸念として記録）。PR レビュー中に「migration を管理したい、できれば Drizzle」
+という要望が出たため検討した。
+
+**Drizzle 不採用**。理由:
+- Drizzle 公式は **DuckDB を dialect として持たない**（PostgreSQL/MySQL/SQLite 系のみ）。DuckDB 対応は
+  コミュニティ製 `@duckdbfan/drizzle-duckdb` 等の experimental・単一メンテナ pkg 頼みで、exact pin +
+  cooldown で絞っている supply-chain 方針に対し migration という critical path に載せるのはリスク大。
+- AGENTS.md の「ORM / query builder を入れない、raw SQL を agent の唯一 interface に」と逆行。
+- agent が読む schema 契約は runtime の `meml schema`（DuckDB introspection）であって Drizzle の
+  `schema.ts` ではない。Drizzle 最大の旨味（schema を TS の SoT にする）がこの設計だと効かない。
+
+**採用: 依存ゼロの軽量 raw-SQL runner**（`src/storage/migrations/`）:
+- 番号付き `.sql`（`0001_init.sql`）を `migrations/index.ts` が **runtime fs scan（`readdirSync`）で
+  自動収集**し、ファイル名順（= 適用順）に `MIGRATIONS` へ。手動登録なし（追加忘れが起きない）。
+  命名規約 `<NNNN>_<name>.sql` 外・番号重複は読み込み時に明示エラーで落とす（黙って skip しない）。
+  - 当初は `with { type: "text" }` の明示 import + 手動配列登録にしたが、「追加忘れ」footgun を
+    嫌い自動収集へ変更。`import.meta.glob` は Bun 未実装（Vite 専用）なので不採用。runtime scan は
+    meml が `bun run src/index.ts`（bin→`./src/index.ts`）でソース実行のため確実に動く。**唯一の制約**は
+    `bun build --compile` 単体バイナリ化時に sibling `.sql` を読めないこと（バイナリ隣に file が無い）。
+    バイナリ配布する段階になったら text import 埋め込みに戻す（index.ts のコメントに明記）。
+- `schema_migrations(version TEXT PK, applied_at TIMESTAMPTZ)` で適用済みを記録。未適用のみを
+  ファイル順に **各 migration 1 transaction** で適用（`conn.run` がマルチステートメント .sql を実行
+  できることを spike で確認済み）。冪等なので `meml init` 毎の再実行は安全。
+- **migration は immutable**: shipped 後は編集禁止（変更は新 migration）。よって `EMBED_DIM` 等の
+  config 由来値も `.sql` 内では literal（`FLOAT[1024]`）で焼く。repo.ts / schema.ts の runtime 側は
+  引き続き `EMBED_DIM` 定数を使う（migration とは別軸）。
+- **baseline (0001) だけ `IF NOT EXISTS` を残す**: migration runner 導入前の既存 dogfood DB に被せても
+  「table 既存→適用エラー」にならないため（baseline は防御的に冪等、0002 以降は素の DDL を1回適用）。
+- `schema_migrations` は `meml schema`（agent 契約）には出さない（schema.ts が `memory`/`memory_chunks`
+  に絞っているため）。内部 bookkeeping を agent の query 契約に混ぜない。
+- down migration は個人ツールでは YAGNI で持たない（必要時に追加）。
+
+## 1. DuckDB の FOREIGN KEY を撤廃（dd schema からの逸脱・重要）
+
+dd schema は `memory_chunks.memory_id TEXT NOT NULL REFERENCES memory(id) ON DELETE CASCADE`。
+DuckDB(@duckdb/node-api 1.5.2-r.1) では FK に次の制約があり、中核フローが両方壊れた:
+
+- `ON DELETE CASCADE` / `SET NULL` / `SET DEFAULT` を**宣言できない**（パースエラー）。
+- 子行を先に削除しても、親削除や「delete→同一 source_id で再 insert」パターンで
+  `Constraint Error: ... still referenced by a foreign key` を出す既知の FK 制約。
+  → **UPSERT 再 add** と **remove** が両方失敗した。
+
+判断: FK 制約自体を撤廃し `memory_id TEXT NOT NULL` の**ロジカル参照**に変更。
+整合性はアプリ側で担保する:
+- `upsertMemory`: memory を UPSERT → 旧 chunk を DELETE → 新 chunk を INSERT（同一 transaction）。
+- `removeBySourceId`: chunk を先に DELETE → memory を DELETE（同一 transaction）。
+
+トレードオフ: DB レベルの参照整合性保証は失う。だが chunk の書き込み/削除は常に親 memory と
+同一 transaction で atomic なので孤児 chunk は構造上発生しない。
+代替（FK を残す）は中核操作が動かないため不可。`ON DELETE CASCADE` 相当はコードで再現済み。
+
+## 2. FLOAT[1024] バインドは arrayValue() 推論を使わず明示型必須（地雷・必須対策）
+
+`@duckdb/node-api` の `arrayValue(numbers[])` は要素型を JS 値から**推論**する。
+先頭要素が整数値（`0` や `1.0`）だと ARRAY 要素型を INTEGER と推論し、続く float
+（0.1428…）を**全て整数 truncate → 実質オール 0** にする。spike で発見。
+bge-m3 の正規化済み embedding は先頭が 0 になり得る（mock でも実際に発生）ため実害大。
+cosine が無意味化する。
+
+判断: 全ての `FLOAT[1024]` バインド（chunk 保存・`meml_embed` のクエリベクトル）で
+`prepare()` + `bindArray(idx, Array.from(vec), new DuckDBArrayType(FLOAT, 1024))` の
+**明示型バインド**を使う。`conn.run(sql, {名前:arrayValue(...)})` の推論経路は使わない。
+storage.test.ts に「先頭 0 / 後続 0.5」で truncation しないことの回帰テストを置いた。
+
+## 3. timestamp は TIMESTAMPTZ (UTC instant) で格納
+
+文字列パース/TZ 曖昧性を避けるため、JS epoch ms を `*1000` した BIGINT microseconds を
+bind し、SQL 側で `make_timestamp($n) AT TIME ZONE 'UTC'` で **TIMESTAMPTZ (UTC instant)**
+に変換して格納する（`sourced_at`=mtime, `created_at`/`updated_at`=ingest 時刻）。
+
+当初は dd schema 通り naive TIMESTAMP に UTC wall-clock を格納していたが、self-review
+(step 6) で問題発覚: DuckDB の `now()` は TIMESTAMPTZ を返すため、naive TIMESTAMP との比較で
+session TZ 分のズレが出る (例 Asia/Tokyo で 9h ずれる)。PRD の success metric query 自体が
+`WHERE sourced_at > now() - INTERVAL 30 DAY` と `now()` を使うので、これは実害。
+→ **dd schema の TIMESTAMP を TIMESTAMPTZ に変更** (意図的逸脱)。これで session TZ に依らず
+`now()` 比較が正しくなることを UTC / Asia/Tokyo / America/New_York で検証済み。
+
+## 4. meml init: embedding server 未起動は warning（exit 0）で fatal にしない（dd 文言からの意図的逸脱）
+
+dd には「`meml init` で接続を check し未起動なら明示エラー」とあるが、init の本質は
+vault/DB/schema 作成（US-001 / FR1）で、server が要るのは add / query 時。
+fatal にすると「DB だけ先に作る」「server 起動前に dry-run で疎通確認」ができず冪等運用を阻害する。
+
+判断: DB セットアップ（vault 0700 / DB / vss / migration）は必ず完了させ、その後 server を
+health check。未到達なら stderr に構造化 warning `{warning:{code,message,hint}}` を出すが
+**exit 0**。実際の `add` / `meml_embed` 実行時には `EMBED_SERVER_UNAVAILABLE` で hard fail
+するので、server 依存は「使う箇所」で強制される。fatal を望むなら戻せる（要相談）。
+
+## 5. read-only enforcement: 3 段 (engine external-access lockdown が本丸)
+
+self-review (step 6) で重大な穴を発見・修正した。当初は (1) read_only connection +
+(2) keyword allowlist の二段だったが、レビューで **`read_text` / `read_csv` / `glob` /
+`query()` / `COPY TO` 等の DuckDB table function 経由で任意ファイル読み書きが allowlist を
+すり抜ける**ことが判明 (実際に `/etc/hosts` を読めた)。dd の read-only 節は `read_csv('/etc/...')`
+を防ぐ前提と明記しており、これは**仕様違反のセキュリティ regression**だった。keyword
+denylist は DuckDB の開かれた table function 群 (特に任意 SQL を実行する `query()`) を
+列挙しきれず、原理的に不十分。
+
+→ 修正: read-only connection で **`SET enable_external_access = false`** を実行
+(`src/storage/db.ts`)。engine レベルで file IO / ATTACH / INSTALL/LOAD / network を一律
+遮断する。`query()` でネストしても内側の file access ごと遮断されることを検証済み。
+これが本丸の防御で、allowlist は **defense-in-depth + 明快なエラー** の位置づけに降格。
+注意: `enable_external_access=false` は LOAD vss の **後** に実行する (extension load 自体が
+external access)。one-way で再有効化不可。read-write (ingest) connection には掛けない
+(`meml add`/`remove` は user SQL を実行せず内部の parameterized SQL のみなので攻撃面が無い)。
+
+allowlist (二段目) は **string literal / comment / dollar-quote を中和してから** keyword
+判定する: 単一 statement / 先頭 SELECT or WITH のみ / 書き込み・副作用 keyword 拒否。
+self-review で **dollar-quote (`$$...$$` / `$tag$...$tag$`) 未対応**も発覚 — literal 内の `'`
+が stripper を誤動作させ、(a) 後続 statement を隠蔽し multi-statement check をすり抜ける、
+(b) `SELECT $$DROP$$` 等の正当な query を誤拒否する、の双方があった。`src/sql/scan.ts` の
+`dollarQuoteEnd` を guard / preprocess 両方に追加して解消 (テスト済み)。
+`EXPLAIN` / `DESCRIBE` / `SHOW` / `PRAGMA` は SELECT/WITH 限定により不可。introspection は
+`meml schema` に集約。
+
+## 6. chunker 戦略を確定（dd で「実装時に確定」とされたもの）
+
+char ベース・境界優先（`\n\n` → `\n` → space）、`CHUNK_MAX_CHARS=1500` / `OVERLAP=150`
+（`src/config.ts`）。bge-m3 は最大 8192 token だが日本語は token/char 比が高いので保守的に
+1500 char。多くの memo は 1 chunk。実 corpus で 19 memo → 57 chunk（長い memo が複数分割）を確認。
+検索品質を見て定数で調整可能。pooling / chunker version は記録しない（dd 通り YAGNI）。
+
+## 7. その他の確定事項
+
+- **author の取得元**: dd「config の user identity」。Phase 0 に config ファイルが無いので
+  `MEML_AUTHOR` env → なければ OS username（`os.userInfo().username`）。
+- **対応拡張子**: prd は「.md のみ」。実装は `.md` と `.markdown` を受理（どちらも明白に markdown で
+  特別扱いではない）。
+- **第1 H1 抽出はコードフェンス内を除外**: ` ``` ` / `~~~` フェンス内の `# ...` は title 候補に
+  しない（フェンス内のシェルコメント等の誤採用回避）。frontmatter は parse しない方針は維持
+  （H1 は「見出し行の最初の1行」を読むだけ）。
+- **meml_embed の dedupe**: 同一 literal が複数あっても embed HTTP は 1 回（param 共有）。
+- **embedding 生成は write transaction の外（先）**: embed を全部済ませてから transaction を
+  開くので、server 失敗時に DB 無変更を保証（atomic 失敗）。
+- **command 出力**: `sql` は行（JSON array / csv / table）。`add`/`init`/`remove` は単一 object
+  （json）/`key: value`（table）。memory id は stdout（AC）。warning は stderr の構造化 JSON。
+- **remove の path 解決 fallback**: realpath は存在ファイル前提。rename orphan は元ファイルが
+  消えているので、存在すれば realpath、失敗時は `path.resolve` 絶対パスに fallback
+  （orphan の source_id を狙える）。symlink 経由 ingest 後に削除されたケースは realpath 不能で
+  取りこぼし得る（稀・許容）。
+- **BIGINT は文字列で返る**: `@duckdb/node-api` の getRowObjectsJson は BIGINT/HUGEINT を string
+  にする（`count(*)` が `"19"` 等）。agent はこれを前提に SQL を書く。
+
+## 7b. self-review (step 6) で入れたその他の hardening
+
+レビュー (Claude code-review + Codex) 指摘を loop 前に修正:
+
+- **`$qvec_N` param 名の衝突**: user が SQL に `$qvec_1` を書くと `meml_embed` の bind と同一
+  param に coalesce され、placeholder が黙って embedding vector になる。→ `meml sql` は呼び出し
+  ごとにランダム prefix (`q<8hex>`) を生成して `preprocessEmbed(sql, prefix)` に渡し衝突を排除。
+  `preprocessEmbed` の prefix は引数化 (default `qvec` で既存テスト互換)。
+- **`hasControlChar` が DEL (0x7f) を見逃し**: `< 0x20` のみだったのを `|| === 0x7f` 追加。
+- **chunker の overlap 暴走**: caller が `overlap >= maxChars` 相当を渡すと 1 文字ずつしか進まず
+  quadratic に再 embed。default (1500/150) は安全だが防御的に `overlap` を `maxChars/2` に clamp。
+- **空 content の silent trap**: whitespace のみの md は chunk 0 件で semantic search に出ない。
+  `add` 時に `NO_CHUNKS` warning を stderr に出す (structured query では引ける旨も hint)。
+
+## 8. 依存・supply chain
+
+- CLI parser は追加せず Node 標準の `node:util` `parseArgs` で subcommand routing（依存最小化、
+  commander 不採用）。UUID v7 は `Bun.randomUUIDv7()`（追加ライブラリ不要）。embedding は
+  llama-server への HTTP（`fetch`）なので追加 native 依存なし。
+- 唯一の実依存は `@duckdb/node-api`。`bunfig.toml` に `minimumReleaseAge=604800`（7日 cooldown）+
+  `exact=true`。最新 `1.5.3-r.1` は 3.7日齢で cooldown 未満のため、7日超の最新 `1.5.2-r.1`
+  （40日齢）に解決・exact ピン。
+- lint/format: `oxlint` / `oxfmt` が未インストール（mise にも無い）のため本実装では未実行。
+  スタイルは既存方針に合わせ手動で統一。
+
+## 9. テスト
+
+`bun test` で 48 件 (self-review 後に security / dollar-quote / prefix の回帰テストを追加)。
+pure unit（guard / preprocess / chunk / md title 抽出 / read-only lockdown）+ storage 統合
+（temp vault に migrate→upsert→再 upsert(created_at 保持/updated_at 前進/chunk 置換)→
+cosine ランキング→remove、合成 embedding で server 非依存）。E2E は mock embedding server
+（`/health` + `/v1/embeddings` 1024dim）で `meml add`→`meml_embed` semantic search まで確認し、
+実 corpus（wwwyo/me daily memo 19件）の bulk ingest（find|while-read）も完走確認済み。
+実 bge-m3（llama-server）での検索品質は未検証（model 未起動環境のため）。
