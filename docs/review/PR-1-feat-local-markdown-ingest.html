@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>meml PR #1 リスクパネル — feat: local markdown ingest (DuckDB + embedding + raw-SQL CLI)</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --card: #ffffff;
+    --text: #18181b;
+    --muted: #71717a;
+    --border: #e4e4e7;
+    --code-bg: #f4f4f5;
+    --link: #2563eb;
+    --high: #c2410c;
+    --med:  #a16207;
+    --low:  #15803d;
+    --unknown: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7; font-size: 15px;
+  }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 26px 24px 22px; }
+  .header-inner { max-width: 1192px; margin: 0 auto; }
+  header .eyebrow { color: var(--muted); font-size: 13px; margin: 0 0 6px; letter-spacing: 0.03em; }
+  header h1 { margin: 0 0 10px; font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -0.01em; }
+  .meta { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 13px; }
+  .meta code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+  .verdict-line { margin: 16px 0 0; font-size: 13.5px; color: #52525b; display: flex; gap: 8px; align-items: baseline; max-width: 880px; }
+  .verdict-line strong { color: var(--text); font-weight: 600; white-space: nowrap; }
+
+  .layout { max-width: 1240px; margin: 0 auto; padding: 0 24px; display: grid; grid-template-columns: 200px minmax(0,1fr); gap: 32px; align-items: start; }
+  .toc { position: sticky; top: 18px; padding-top: 26px; }
+  .toc .toc-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; padding-left: 12px; }
+  .toc ol { list-style: none; margin: 0; padding: 0; }
+  .toc a {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 5px 12px; font-size: 13px; color: #52525b;
+    border-left: 2px solid var(--border); border-radius: 0 4px 4px 0;
+  }
+  .toc a:hover { color: var(--text); background: #f4f4f5; text-decoration: none; }
+  .toc a.active { color: var(--text); font-weight: 600; border-left-color: var(--text); background: #f4f4f5; }
+  .toc a .t-num { color: var(--muted); font-size: 11px; min-width: 12px; }
+
+  main { padding: 26px 0 80px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 22px 26px 18px; margin-bottom: 16px; scroll-margin-top: 14px; }
+  section h2 { margin: 0 0 12px; font-size: 17px; font-weight: 600; letter-spacing: -0.005em; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  section h2 .num { color: var(--muted); font-weight: 400; }
+  .lead { color: #52525b; font-size: 13.5px; margin: 0 0 14px; }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; vertical-align: middle; }
+  .dot.high { background: var(--high); } .dot.med { background: var(--med); }
+  .dot.low { background: var(--low); } .dot.unknown { background: var(--unknown); }
+  .sev { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #52525b; font-weight: 600; white-space: nowrap; }
+  .sev .lbl-high { color: var(--high); } .sev .lbl-med { color: var(--med); }
+  .sev .lbl-low { color: var(--low); } .sev .lbl-unknown { color: var(--unknown); }
+
+  table.cockpit { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 2px 0 16px; }
+  table.cockpit th { text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
+  table.cockpit td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  table.cockpit tr:last-child td { border-bottom: none; }
+  table.cockpit td.obs { font-weight: 600; white-space: nowrap; }
+  table.cockpit td.judge { white-space: nowrap; }
+  table.cockpit td.sig { color: #3f3f46; }
+
+  .minimum { border: 1px solid var(--border); border-left: 2px solid var(--border); border-radius: 0 8px 8px 0; padding: 12px 16px; margin-top: 8px; }
+  .minimum .label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .minimum ol { margin: 6px 0 0; padding-left: 20px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  .triage-stats { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+  .triage-stats strong { color: var(--text); }
+  .fgroup { margin: 0 0 14px; }
+  .fgroup .ghead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .fgroup.skip .ghead { color: var(--muted); }
+  ul.files { list-style: none; margin: 0; padding: 0; }
+  ul.files li { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  ul.files li:last-child { border-bottom: none; }
+  ul.files code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; white-space: nowrap; }
+  ul.files .note { color: #52525b; }
+  .collapsed-note { font-size: 13px; color: var(--muted); padding: 4px 0; }
+
+  .risk-card { border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin: 12px 0; }
+
+  details.why { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+  details.why > summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--link); list-style: none; }
+  details.why > summary::-webkit-details-marker { display: none; }
+  details.why > summary::before { content: "▸ "; }
+  details.why[open] > summary::before { content: "▾ "; }
+  details.why .why-body { font-size: 13px; color: #3f3f46; margin-top: 8px; }
+  details.why .why-body .term { font-weight: 600; color: var(--text); }
+
+  .detect { font-size: 12px; color: var(--muted); margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+  .detect strong { color: #52525b; font-weight: 600; }
+
+  .concern-card { border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin: 12px 0; }
+  .concern-card .name { font-weight: 600; margin: 0 0 6px; }
+  .concern-card .impact { font-size: 13px; color: #52525b; margin: 0 0 10px; }
+  .concern-card .options { border-left: 2px solid var(--border); padding: 6px 12px; font-size: 13px; }
+
+  .comment-card { border: 1px solid var(--border); border-radius: 8px; padding: 15px 18px; margin: 12px 0; }
+  .comment-card .name { font-weight: 600; margin: 0 0 6px; }
+  .comment-card .where { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+
+  p { margin: 0 0 10px; }
+  ul, ol { margin: 0 0 10px; padding-left: 22px; } li { margin-bottom: 4px; }
+  code { font-family: "SF Mono", Menlo, Monaco, Consolas, monospace; font-size: 13px; }
+  p code, li code, td code, dd code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: #fafafa; border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; margin: 8px 0 0; font-size: 12.5px; line-height: 1.55; }
+  pre code { background: transparent; padding: 0; color: var(--text); }
+  a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+  td.obs a, a.xref { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
+  td.obs a:hover, a.xref:hover { border-bottom-color: var(--muted); text-decoration: none; }
+  dl.glossary { font-size: 13px; }
+  dl.glossary dt { font-weight: 600; font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  dl.glossary dd { margin: 2px 0 10px; color: #3f3f46; }
+  figure.flow { margin: 4px 0 14px; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; }
+  figure.flow figcaption { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .flow-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; padding: 5px 0; }
+  .flow-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; width: 64px; flex-shrink: 0; }
+  .node { display: inline-flex; flex-direction: column; align-items: center; border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font-size: 13px; line-height: 1.35; }
+  .node small { color: var(--muted); font-size: 10.5px; margin-top: 1px; }
+  .node.added { border-style: dashed; border-color: var(--high); }
+  .node.added small { color: var(--high); }
+  .arr { color: var(--muted); flex-shrink: 0; }
+  .arr.new { color: var(--high); }
+  .fanout { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .routes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip { border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 12px; color: #52525b; font-family: "SF Mono", Menlo, monospace; }
+  .chip.more { font-family: inherit; font-weight: 600; color: var(--text); }
+  @media (max-width: 1080px) {
+    .layout { grid-template-columns: 1fr; }
+    .toc { display: none; }
+    main { padding-top: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <p class="eyebrow">wwwyo/meml · PR #1</p>
+    <h1>feat: local markdown ingest (DuckDB + embedding + raw-SQL CLI)</h1>
+    <div class="meta">
+      <span><a href="https://github.com/wwwyo/meml/pull/1" target="_blank" rel="noopener noreferrer">github #1</a></span>
+      <span>branch: <code>feat/local-markdown-ingest</code></span>
+      <span>4 commits</span>
+      <span>37 files / +2004 −90</span>
+    </div>
+    <p class="verdict-line">
+      <span><span class="dot high"></span></span>
+      <span><strong>総合 High</strong> — 基盤 PR。<code>meml sql</code> の read-only enforcement (security) と DB schema + <code>meml schema</code> agent 契約 (戻せない) の 2 点に集中。schema は migration runner (<code>0001_init.sql</code>) 経由で管理。生成物は <code>bun.lock</code> 1 件のみ、残りは手書き。</span>
+    </p>
+  </div>
+</header>
+
+<div class="layout">
+
+  <nav class="toc" aria-label="目次">
+    <p class="toc-title">目次</p>
+    <ol>
+      <li><a href="#what"><span class="t-num">1</span>What</a></li>
+      <li><a href="#summary"><span class="t-num">2</span>Risk Summary</a></li>
+      <li><a href="#files"><span class="t-num">3</span>Files Changed</a></li>
+      <li><a href="#datamodel"><span class="t-num">6</span>Data Model</a></li>
+      <li><a href="#permission"><span class="t-num">7</span>Permission</a></li>
+      <li><a href="#concern"><span class="t-num">8</span>懸念点</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+  <!-- ============== §1 What ============== -->
+  <section id="what">
+    <h2><span class="num">1.</span>What — この PR は何をするか</h2>
+    <p>ローカル markdown を <code>meml add &lt;path&gt;</code> で DuckDB に取り込み、agent が <code>meml sql</code> から raw SQL で構造化 + semantic 両方を query できるようにする Phase 0 実装。あわせて、後続 source plugin (RSS / PDF / 画像) が乗る基盤 (DuckDB + vss / embedding pipeline / CLI 骨格) を確立する。</p>
+
+    <figure class="flow">
+      <div class="flow-row"><span class="flow-label">今日</span>
+        <span class="node">src/index.ts<small>placeholder</small></span></div>
+      <div class="flow-row"><span class="flow-label">ingest</span>
+        <span class="node added">md file<small>＋新規</small></span><span class="arr new">⇢</span>
+        <span class="node added">md plugin<small>title/mtime</small></span><span class="arr new">⇢</span>
+        <span class="node added">DuckDB + vss<small>memory / memory_chunks</small></span><span class="arr new">⇢</span>
+        <span class="node added">llama-server<small>bge-m3 1024d</small></span></div>
+      <div class="flow-row"><span class="flow-label">query</span>
+        <span class="node added">agent<small>raw SQL</small></span><span class="arr new">⇢</span>
+        <span class="node added">meml sql<small>preprocessor + guard</small></span><span class="arr new">⇢</span>
+        <span class="node added">READ_ONLY conn<small>+ ext-access off</small></span><span class="arr new">⇢</span>
+        <span class="node added">DuckDB<small>memory + chunks</small></span></div>
+      <figcaption>ingest path (md → DB) と query path (agent → meml sql → read-only DB) の 2 系統。両方とも新規。</figcaption>
+    </figure>
+
+    <p class="lead">この PR 特有の言葉だけ先に定義する（一般用語は省略）:</p>
+    <dl class="glossary">
+      <dt>source_id</dt>
+      <dd><code>UNIQUE(source, source_id)</code> の identity 列。md は realpath、RSS は GUID、GitHub PR は <code>owner/repo/pull/N</code> のように source ごと canonical な ID を入れる。URL を持たない source でも壊れない identity。</dd>
+      <dt>meml_embed('text')</dt>
+      <dd><code>meml sql</code> 内でのみ使える pseudo-function。CLI 側 preprocessor が literal を 1 回だけ embed し <code>$qvec_N</code> param に bind してから DuckDB に渡す (DuckDB の scalar UDF ではない)。行ごと HTTP 評価リスクと read-only 衝突を回避する設計。</dd>
+      <dt>READ_ONLY connection</dt>
+      <dd>DuckDB <code>access_mode: "READ_ONLY"</code> で開いた接続。engine が DB ファイルへの書き込みを拒否する。ただし <code>read_csv</code>/<code>COPY TO</code> 等の filesystem 系副作用は別途遮断が必要。</dd>
+      <dt>enable_external_access = false</dt>
+      <dd>DuckDB の engine 設定。<code>read_csv</code> / <code>read_text</code> / <code>glob</code> / <code>COPY</code> / <code>ATTACH</code> / network を一律遮断する。本 PR では read-only connection で LOAD vss 後に有効化し、agent SQL からの任意ファイル read/write を engine レベルで止める。</dd>
+    </dl>
+
+    <p class="lead">設計ドキュメント (gitignore された <code>.agent/prd/local-markdown-ingest/</code> に prd/dd/decision.log) はリポジトリには含まれないため、リンク先は <a href="https://github.com/wwwyo/meml/blob/feat/local-markdown-ingest/AGENTS.md" target="_blank" rel="noopener noreferrer">AGENTS.md</a> (アーキテクチャ / 設計思想) を参照する。</p>
+  </section>
+
+  <!-- ============== §2 Risk Summary（計器盤） ============== -->
+  <section id="summary">
+    <h2><span class="num">2.</span>Risk Summary</h2>
+    <p class="lead">各観点の検知結果。High の行だけ下へ drill down すればよい。None＝確認した上で問題なし (確認方法を併記)、未確認＝今回トレースしきれていない。</p>
+
+    <table class="cockpit">
+      <thead><tr><th>観点</th><th style="width:104px;">判定</th><th>何が・なぜ気になるか</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="obs">Impact</td>
+          <td class="judge"><span class="sev"><span class="dot low"></span><span class="lbl-low">None</span></span></td>
+          <td class="sig">greenfield (init commit に placeholder のみ)。外部 caller 不在。確認: <code>git log main..HEAD</code> で先行 import 元なし、<code>src/</code> 全 export は新規シンボル</td>
+        </tr>
+        <tr>
+          <td class="obs">Architecture</td>
+          <td class="judge"><span class="sev"><span class="dot low"></span><span class="lbl-low">None</span></span></td>
+          <td class="sig">新規実依存は <code>@duckdb/node-api</code> のみ (exact pin + 7日 cooldown)、CLI parser は <code>node:util</code> で内製。layer 逆転なし、<code>src/sql/scan.ts</code> が guard/preprocess 両方から使われる共有 helper</td>
+        </tr>
+        <tr>
+          <td class="obs"><a href="#datamodel">Data Model</a></td>
+          <td class="judge"><span class="sev"><span class="dot high"></span><span class="lbl-high">High · 戻せない</span></span></td>
+          <td class="sig">DB schema (<code>memory</code> / <code>memory_chunks</code>) と <code>meml schema</code> の agent 契約がここで確定。migration runner (<code>0001_init.sql</code> + <code>schema_migrations</code>) で管理。<code>TIMESTAMPTZ</code> / <code>FLOAT[1024]</code> 次元固定 / FK 撤廃 (DuckDB 制約) / <code>UNIQUE(source, source_id)</code></td>
+        </tr>
+        <tr>
+          <td class="obs"><a href="#permission">Permission</a></td>
+          <td class="judge"><span class="sev"><span class="dot high"></span><span class="lbl-high">High · security</span></span></td>
+          <td class="sig"><code>meml sql</code> が agent に raw SQL を渡す唯一の境界。READ_ONLY connection + <code>enable_external_access=false</code> + statement allowlist の 3 段で <code>read_text</code> / <code>query()</code> / <code>COPY</code> 等の任意ファイル read/write を防ぐ</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="minimum">
+      <span class="label">時間がなければここだけ</span>
+      <ol>
+        <li><code>src/storage/migrate.ts</code> — DB schema の literal (column 名/型/UNIQUE 制約) を眺め、欠落している axis や型の妥当性を確認 (<a class="xref" href="#datamodel">Data Model</a>)</li>
+        <li><code>src/storage/db.ts</code> + <code>src/sql/guard.ts</code> — READ_ONLY + <code>SET enable_external_access=false</code> + 先頭 SELECT/WITH 制限の 3 段が成立しているか (<a class="xref" href="#permission">Permission</a>)</li>
+        <li><code>test/security.test.ts</code> — <code>read_text</code> / <code>query()</code> / <code>COPY TO</code> の遮断回帰テストが現実の attack vector を網羅しているか</li>
+      </ol>
+    </div>
+
+    <div class="legend">
+      <span><span class="dot high"></span>High = 戻せない／影響大、必ず見る</span>
+      <span><span class="dot med"></span>Med = 決め切りたい／構造変化</span>
+      <span><span class="dot low"></span>None = 確認済みで問題なし</span>
+      <span><span class="dot unknown"></span>未確認 = 今回トレースできなかった範囲</span>
+    </div>
+  </section>
+
+  <!-- ============== §3 Files Changed（triage マップ） ============== -->
+  <section id="files">
+    <h2><span class="num">3.</span>Files Changed</h2>
+    <p class="triage-stats">37 files 変更 (+2004 −90)。うち <strong>手書きでリスクを持つのは 25 files (<code>src/</code>)</strong>。残りは doc + config + 生成物 + test で目視は最小限。</p>
+
+    <div class="fgroup">
+      <div class="ghead"><span class="dot high"></span>要レビュー — security / contract 核 (6 files)</div>
+      <ul class="files">
+        <li><code>src/storage/migrations/0001_init.sql</code><span class="note">baseline schema の literal SQL。column 型・UNIQUE 制約・TIMESTAMPTZ・FLOAT[1024] が決まる。immutable (shipped 後編集禁止) (<a class="xref" href="#datamodel">Data Model</a>)</span></li>
+        <li><code>src/storage/migrate.ts</code><span class="note">migration runner。<code>schema_migrations</code> で適用済みを記録し、未適用 .sql を transaction 適用。冪等 (<a class="xref" href="#datamodel">Data Model</a>)</span></li>
+        <li><code>src/storage/db.ts</code><span class="note">read-only connection の access_mode + LOAD vss 後の <code>SET enable_external_access=false</code>。security の本丸 (<a class="xref" href="#permission">Permission</a>)</span></li>
+        <li><code>src/sql/guard.ts</code><span class="note">statement allowlist (単一 statement + 先頭 SELECT/WITH + 書き込み keyword 拒否)。string literal/comment/dollar-quote を中和してから検査 (<a class="xref" href="#permission">Permission</a>)</span></li>
+        <li><code>src/sql/preprocess.ts</code><span class="note"><code>meml_embed('text')</code> を 1 回 embed して <code>$qvec_N</code> に rewrite。dollar-quote 内 literal は触らない (<a class="xref" href="#permission">Permission</a>)</span></li>
+        <li><code>src/commands/schema.ts</code><span class="note">agent が読む契約: tables + vss/meml_embed signature + embedding model/dim を JSON で返す (<a class="xref" href="#datamodel">Data Model</a>)</span></li>
+      </ul>
+    </div>
+
+    <div class="fgroup">
+      <div class="ghead"><span class="dot med"></span>要レビュー — 主要ロジック (8 files)</div>
+      <ul class="files">
+        <li><code>src/storage/repo.ts</code><span class="note">UPSERT (created_at 保持 / chunk 置換) と <code>bindArray(..., DuckDBArrayType(FLOAT, 1024))</code> による truncation 回避。FK なしの cascade を transaction 内で再現</span></li>
+        <li><code>src/commands/sql.ts</code><span class="note">preprocess → guard → embed → prepare → <code>bindArray</code> の組み立て。per-invocation random prefix で <code>$qvec</code> 衝突回避</span></li>
+        <li><code>src/commands/add.ts</code><span class="note">realpath 正規化 → plugin dispatch → embed → transaction 内 UPSERT。embed を transaction 外で先に済ませ atomic 失敗を担保</span></li>
+        <li><code>src/commands/init.ts</code><span class="note">vault (0700) + DB + vss + migration を冪等に。embed server health は warning (exit 0) で fatal にしない</span></li>
+        <li><code>src/commands/remove.ts</code><span class="note">realpath → source_id 解決 → chunk → memory の順で削除。fallback で削除済み path も狙える</span></li>
+        <li><code>src/plugins/md.ts</code><span class="note">title 3 段 fallback (<code>--title</code> → 第1 H1 → filename + warn)。コードフェンス内の <code>#</code> は title 候補にしない</span></li>
+        <li><code>src/embedding/llama-server.ts</code><span class="note">llama-server <code>/health</code> + OpenAI 互換 <code>/v1/embeddings</code> HTTP client。1024 dim 不一致は <code>EMBED_FAILED</code></span></li>
+        <li><code>src/embedding/chunk.ts</code><span class="note">char ベース境界優先 chunker (1500/150)。overlap は <code>maxChars/2</code> に clamp して quadratic 暴走防止</span></li>
+      </ul>
+    </div>
+
+    <div class="fgroup">
+      <div class="ghead"><span class="dot low"></span>要レビュー — 補助 (9 files)</div>
+      <ul class="files">
+        <li><code>src/index.ts</code><span class="note">subcommand routing + structured error envelope。<code>process.exitCode</code> で pipe truncation を回避</span></li>
+        <li><code>src/output.ts</code><span class="note">TTY 判定の json/csv/table 切り替え、command result の 1 オブジェクト出力</span></li>
+        <li><code>src/paths.ts</code><span class="note">control char (0x00-0x1f + 0x7f) 拒否 + realpath、存在しない path は <code>resolve()</code> fallback (orphan 削除用)</span></li>
+        <li><code>src/sql/scan.ts</code><span class="note">guard と preprocess が共有する <code>dollarQuoteEnd</code> ヘルパー。<code>$$</code> / <code>$tag$</code> と <code>$name</code> param を区別</span></li>
+        <li><code>src/config.ts</code><span class="note">EMBED_DIM / EMBED_MODEL / chunk size、vault path 解決、author identity (env or OS user)</span></li>
+        <li><code>src/errors.ts</code><span class="note">構造化エラー <code>MemlError</code> と <code>{error:{code,message,hint}}</code> envelope</span></li>
+        <li><code>src/embedding/index.ts</code><span class="note">差し替え可能な <code>EmbeddingEngine</code> interface。llama-server を default 実装に</span></li>
+        <li><code>src/plugins/md.ts</code><code>src/plugins/index.ts</code><code>src/plugins/types.ts</code><span class="note">plugin registry + extension dispatch + 共通 column mapping の型</span></li>
+      </ul>
+    </div>
+
+    <div class="fgroup skip">
+      <div class="ghead"><span class="dot low"></span>test (6 files)</div>
+      <p class="collapsed-note">unit (<code>guard</code> / <code>preprocess</code> / <code>chunk</code> / <code>md</code>) + 統合 (<code>storage</code> = FLOAT bind / UPSERT / cosine ranking / remove) + 回帰 (<code>security</code> = read_text / query() / COPY TO 遮断)。計 48 件 pass。</p>
+    </div>
+
+    <div class="fgroup skip">
+      <div class="ghead"><span class="dot low"></span>doc + config (4 files)</div>
+      <p class="collapsed-note"><code>AGENTS.md</code> / <code>README.md</code> は SQLite + fastembed の旧記述を DuckDB + llama.cpp + raw-SQL に書き換え。<code>package.json</code> は <code>@duckdb/node-api</code> 追加。<code>bunfig.toml</code> は <code>minimumReleaseAge=604800</code> (7日) + <code>exact=true</code> で supply-chain cooldown を効かせる新規ファイル。</p>
+    </div>
+
+    <div class="fgroup skip">
+      <div class="ghead"><span class="dot unknown"></span>生成物 — provenance 確認済 (1 file)</div>
+      <p class="collapsed-note"><code>bun.lock</code> は <code>bun add @duckdb/node-api</code> の生成物。<code>bunfig.toml</code> の cooldown により latest <code>1.5.3-r.1</code> (3.7日齢) は除外され <code>1.5.2-r.1</code> (40日齢) に解決。pull 後 <code>bun install</code> を再実行すれば同一 lock が再生成可能。</p>
+    </div>
+
+    <details style="margin-top:6px;">
+      <summary style="cursor:pointer;font-size:12.5px;color:var(--muted);">全 changed file 一覧 (37 files)</summary>
+      <ul class="files" style="margin-top:8px;">
+        <li><code>src/sql-text.d.ts</code><span class="note">補助 (新規) / +4 −0 — .sql text import の型宣言</span></li>
+        <li><code>src/storage/migrations/0001_init.sql</code><span class="note">security / contract 核 (新規) / +37 −0 — baseline schema</span></li>
+        <li><code>src/storage/migrations/index.ts</code><span class="note">補助 (新規) / +11 −0 — MIGRATIONS registry</span></li>
+        <li><code>test/migrate.test.ts</code><span class="note">test (新規) / +52 −0 — migration 冪等性 / adoption</span></li>
+        <li><code>AGENTS.md</code><span class="note">doc / +57 −69</span></li>
+        <li><code>README.md</code><span class="note">doc / +23 −26</span></li>
+        <li><code>bun.lock</code><span class="note">生成物 / +29 −0</span></li>
+        <li><code>bunfig.toml</code><span class="note">config (新規) / +4 −0</span></li>
+        <li><code>package.json</code><span class="note">config / +3 −0</span></li>
+        <li><code>src/commands/add.ts</code><span class="note">主要ロジック / +124 −0</span></li>
+        <li><code>src/commands/init.ts</code><span class="note">主要ロジック / +51 −0</span></li>
+        <li><code>src/commands/remove.ts</code><span class="note">主要ロジック / +46 −0</span></li>
+        <li><code>src/commands/schema.ts</code><span class="note">security / contract 核 / +117 −0</span></li>
+        <li><code>src/commands/sql.ts</code><span class="note">主要ロジック / +55 −0</span></li>
+        <li><code>src/config.ts</code><span class="note">補助 / +46 −0</span></li>
+        <li><code>src/embedding/chunk.ts</code><span class="note">主要ロジック / +43 −0</span></li>
+        <li><code>src/embedding/index.ts</code><span class="note">補助 / +19 −0</span></li>
+        <li><code>src/embedding/llama-server.ts</code><span class="note">主要ロジック / +69 −0</span></li>
+        <li><code>src/errors.ts</code><span class="note">補助 / +31 −0</span></li>
+        <li><code>src/index.ts</code><span class="note">補助 / +118 −2</span></li>
+        <li><code>src/output.ts</code><span class="note">補助 / +73 −0</span></li>
+        <li><code>src/paths.ts</code><span class="note">補助 / +34 −0</span></li>
+        <li><code>src/plugins/index.ts</code><span class="note">補助 / +10 −0</span></li>
+        <li><code>src/plugins/md.ts</code><span class="note">主要ロジック / +80 −0</span></li>
+        <li><code>src/plugins/types.ts</code><span class="note">補助 / +20 −0</span></li>
+        <li><code>src/sql/guard.ts</code><span class="note">security / contract 核 / +112 −0</span></li>
+        <li><code>src/sql/preprocess.ts</code><span class="note">security / contract 核 / +137 −0</span></li>
+        <li><code>src/sql/scan.ts</code><span class="note">補助 / +13 −0</span></li>
+        <li><code>src/storage/db.ts</code><span class="note">security / contract 核 / +65 −0</span></li>
+        <li><code>src/storage/migrate.ts</code><span class="note">security / contract 核 / +41 −0</span></li>
+        <li><code>src/storage/repo.ts</code><span class="note">主要ロジック / +108 −0</span></li>
+        <li><code>test/chunk.test.ts</code><span class="note">test / +31 −0</span></li>
+        <li><code>test/guard.test.ts</code><span class="note">test / +54 −0</span></li>
+        <li><code>test/md.test.ts</code><span class="note">test / +67 −0</span></li>
+        <li><code>test/preprocess.test.ts</code><span class="note">test / +65 −0</span></li>
+        <li><code>test/security.test.ts</code><span class="note">test / +47 −0</span></li>
+        <li><code>test/storage.test.ts</code><span class="note">test / +138 −0</span></li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- ============== §6 Data Model ============== -->
+  <section id="datamodel">
+    <h2><span class="num">6.</span>Data Model Changes <span class="sev"><span class="dot high"></span><span class="lbl-high">High · 戻せない</span></span></h2>
+    <p class="lead">DB に保存される構造と、<code>meml schema</code> 経由で agent に見える契約。今回 schema を確定するため、後で変えると user の既存 DB の migration が要る。</p>
+
+    <div class="risk-card">
+      <p><strong>DB schema (<code>memory</code> + <code>memory_chunks</code>) を確定する。</strong></p>
+<pre><code>CREATE TABLE IF NOT EXISTS memory (
+  id          TEXT PRIMARY KEY,        -- UUID v7 (内部 surrogate)
+  source      TEXT NOT NULL,           -- "md" | "rss" | ...
+  source_id   TEXT NOT NULL,           -- source 内 canonical (md=realpath)
+  url         TEXT,
+  title       TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  author      TEXT,
+  tags        TEXT[],
+  sourced_at  TIMESTAMPTZ,             -- source 側 mtime 等
+  metadata    JSON,                    -- source 固有 raw
+  created_at  TIMESTAMPTZ NOT NULL,    -- 初回 ingest
+  updated_at  TIMESTAMPTZ NOT NULL,    -- 最終 ingest (UPSERT で更新)
+  UNIQUE (source, source_id)
+);
+
+CREATE TABLE IF NOT EXISTS memory_chunks (
+  id              TEXT PRIMARY KEY,
+  memory_id       TEXT NOT NULL,       -- logical 参照、FK ではない
+  chunk_index     INTEGER NOT NULL,
+  content         TEXT NOT NULL,
+  embedding       FLOAT[1024],         -- bge-m3 固定次元
+  embedding_model TEXT NOT NULL,       -- 混在検知用
+  UNIQUE (memory_id, chunk_index)
+);</code></pre>
+      <ul>
+        <li><strong>TIMESTAMPTZ</strong> (UTC instant) を採用。当初 dd 通り naive <code>TIMESTAMP</code> だったが、DuckDB の <code>now()</code> は TIMESTAMPTZ なので session TZ 分の skew が出ていた。PRD の success metric query 自体が <code>WHERE sourced_at &gt; now() - INTERVAL 30 DAY</code> と書くので実害。<code>make_timestamp($us) AT TIME ZONE 'UTC'</code> で UTC instant を bind する</li>
+        <li><strong>FK 撤廃</strong>。dd は <code>REFERENCES memory(id) ON DELETE CASCADE</code> だったが、DuckDB FK は (a) CASCADE 宣言不可、(b) delete→再 insert / 親削除で参照エラー、で UPSERT と remove が両方壊れた。<code>memory_id</code> は logical (app-enforced) 参照に降格し、cascade は transaction 内で明示的に再現</li>
+        <li><strong>embedding FLOAT[1024]</strong> 固定。bge-m3 (llama-server) に依存。別 model に切り替える場合は別 column or 別 table が必要。<code>embedding_model</code> 文字列を 1 chunk ごとに記録して混在検知できる</li>
+        <li><strong>UNIQUE(source, source_id)</strong> を全 source の identity に。md は <code>realpath</code>、後続予定: RSS=GUID、GitHub=<code>owner/repo/pull/N</code>、Slack=channel+ts。<code>UNIQUE(source, url)</code> 案だと url を持たない source で NULL 抜けする問題を回避</li>
+        <li>schema は migration runner で管理: <code>schema_migrations(version, applied_at)</code> で適用済みを記録し、番号付き <code>.sql</code> をファイル順に各 1 transaction で適用 (冪等)。baseline <code>0001_init.sql</code> は immutable なので <code>FLOAT[1024]</code> 等は literal で焼く。Phase 1 の column 追加は <code>0002_*.sql</code> を足すだけ</li>
+      </ul>
+      <details class="why">
+        <summary>なぜ「戻せない」のか（前提から）</summary>
+        <div class="why-body">
+          dd の方針として agent は <span class="term">raw SQL を唯一の interface</span> として使う。これは ORM/wrapper を挟まないので柔軟だが、代わりに <span class="term">DB schema が agent から見える契約</span>になる。column 名や型が後で変わると、agent が <code>meml schema</code> を読んで組み立てた既存の query 文字列 (or agent 自身の学習) が壊れる。さらに DuckDB の column 型変更は <code>ALTER TABLE ... ALTER COLUMN ... TYPE ...</code> で書けるが既存データの cast が要り、特に NOT NULL を後付けすると既存 row の backfill が必要。今回確定する axis のうち <code>FLOAT[1024]</code> 次元は model 依存、<code>TIMESTAMPTZ</code> は agent クエリの now() 比較に直結、<code>UNIQUE(source, source_id)</code> は全 source 共通 identity の前提として後続 plugin に乗る — 後から差し替えると後続 plugin と既存データの両方を巻き込む。
+        </div>
+      </details>
+      <p class="detect"><strong>検知方法:</strong> <code>~/.agents/skills/review-guide/scripts/pr-diff.sh -- 'src/storage/migrations/0001_init.sql' 'src/storage/migrate.ts' 'src/commands/schema.ts'</code> で literal を直視。baseline の <code>FLOAT[1024]</code> は immutable な migration に焼かれ、runtime 側 (repo.ts / schema.ts) は <code>src/config.ts</code> の <code>EMBED_DIM</code> を使う。<code>meml schema</code> 出力には FUNCTIONS (vss + <code>meml_embed</code>) も含まれるので、agent が <code>array_cosine_similarity</code> 等を引ける契約も同時に決まる (<code>schema_migrations</code> は契約に露出しない)。</p>
+    </div>
+  </section>
+
+  <!-- ============== §7 Permission ============== -->
+  <section id="permission">
+    <h2><span class="num">7.</span>Permission Changes <span class="sev"><span class="dot high"></span><span class="lbl-high">High · security</span></span></h2>
+    <p class="lead"><code>meml sql</code> は agent に raw SQL を投げさせる唯一の境界。memo 内容が prompt injection を含む可能性があるので、agent SQL は untrusted として扱う必要がある。</p>
+
+    <div class="risk-card">
+      <p><strong>3 段 enforcement の正しさが核心。</strong></p>
+<pre><code>// src/storage/db.ts
+const options = mode === "read-only" ? { access_mode: "READ_ONLY" } : undefined;
+const instance = await DuckDBInstance.create(path, options);
+const conn = await instance.connect();
+await loadVss(conn, mode === "read-write");   // read-only は LOAD のみ (INSTALL なし)
+if (mode === "read-only") {
+  await conn.run("SET enable_external_access = false");  // LOAD vss の後
+}
+
+// src/sql/guard.ts (allowlist)
+const FORBIDDEN = [
+  "INSERT","UPDATE","DELETE","CREATE","DROP","ALTER","ATTACH","DETACH",
+  "COPY","INSTALL","LOAD","PRAGMA","CALL","SET","RESET","EXPORT","IMPORT",
+  "VACUUM","CHECKPOINT","TRUNCATE","MERGE","GRANT","REVOKE","ANALYZE","USE",
+];
+// 先頭が SELECT or WITH のみ許可、string literal / comment / dollar-quote を中和してから keyword 走査</code></pre>
+      <ul>
+        <li><strong>層 1 (engine): READ_ONLY connection</strong> — DB ファイルへの書き込みを engine が拒否。bypass 不可</li>
+        <li><strong>層 2 (engine): <code>SET enable_external_access = false</code></strong> — <code>read_csv</code> / <code>read_text</code> / <code>glob</code> / <code>COPY TO</code> / <code>ATTACH</code> / network を engine 設定で遮断。<code>query()</code> でネストしても内側の file access ごと遮断される。<strong>これが本丸の防御</strong> — keyword allowlist では DuckDB の table function 群を列挙しきれないので、engine 側で禁止する</li>
+        <li><strong>層 3 (parser): statement allowlist</strong> — 単一 statement / 先頭 <code>SELECT</code> or <code>WITH</code> / 書き込み・副作用 keyword 拒否。明快なエラーを返す defense-in-depth。dollar-quote (<code>$$..$$</code> / <code>$tag$..$tag$</code>) を中和してから keyword 走査することで literal 内 <code>DROP</code> の誤検知と multi-statement 隠蔽の両方を回避</li>
+        <li><strong>meml_embed の bind 名衝突回避</strong> — preprocessor は呼び出しごとに <code>q&lt;8hex&gt;</code> ランダム prefix を生成し <code>$q&lt;hex&gt;_N</code> を emit する。user が偶然 <code>$qvec_1</code> を書いても自身の embedding vector を踏まない</li>
+        <li><strong>ingest path (read-write conn) には <code>enable_external_access=false</code> を掛けない</strong>。<code>add</code> / <code>remove</code> は user SQL を実行せず内部 parameterized SQL のみで攻撃面が無いため</li>
+      </ul>
+
+      <figure class="flow">
+        <div class="flow-row"><span class="flow-label">攻撃例</span>
+          <span class="node added">SELECT * FROM read_text('/etc/hosts')<small>file read 試行</small></span></div>
+        <div class="flow-row"><span class="flow-label">層 1</span>
+          <span class="node">READ_ONLY conn<small>SELECT は通る</small></span><span class="arr">→</span><span class="chip">通過</span></div>
+        <div class="flow-row"><span class="flow-label">層 2</span>
+          <span class="node added">ext-access=false<small>＋engine 遮断</small></span><span class="arr new">⇢</span><span class="chip more">ここで止まる</span></div>
+        <div class="flow-row"><span class="flow-label">層 3</span>
+          <span class="node">allowlist<small>先頭 SELECT のみ</small></span><span class="arr">→</span><span class="chip">通過 (層 2 backup)</span></div>
+        <figcaption>典型的な attack vector (<code>read_text</code> / <code>read_csv</code> / <code>query()</code> / <code>COPY TO</code>) は層 2 で engine が遮断する。<code>test/security.test.ts</code> が回帰で押さえる。</figcaption>
+      </figure>
+
+      <details class="why">
+        <summary>なぜ危険か（前提から）</summary>
+        <div class="why-body">
+          meml の使い方は「agent が memo を文脈に raw SQL を生成して投げる」。<span class="term">prompt injection</span> = ingest した memo の本文が agent への指示として読まれるリスク。injection された SQL が untrusted 入力として <code>meml sql</code> に渡る前提で防御を組む必要がある。DuckDB は table function (<code>read_csv</code>, <code>read_text</code>, <code>glob</code>, <code>query</code>) で任意ファイル read / <code>COPY TO</code> で任意ファイル write ができるので、これらが通ると <span class="term">arbitrary local file exfiltration / overwrite</span> になる。<code>READ_ONLY</code> mode だけでは DB 書き込みしか止まらず file IO は通る点を見落とすと穴になる。keyword denylist で塞ぐ案は DuckDB が任意 SQL を実行する <code>query('...')</code> table function を持つため原理的に列挙しきれない。<span class="term">engine 設定 (<code>enable_external_access</code>) でカテゴリごと禁止する</span>のが正解。
+        </div>
+      </details>
+
+      <p class="detect"><strong>検知方法:</strong> <code>~/.agents/skills/review-guide/scripts/pr-diff.sh -- 'src/storage/db.ts' 'src/sql/guard.ts' 'src/sql/preprocess.ts' 'src/sql/scan.ts'</code> で 3 段それぞれの diff を直視。<code>test/security.test.ts</code> が <code>read_text('/etc/hosts')</code> / <code>query('...read_text(...)')</code> / <code>COPY (SELECT 1) TO '...'</code> の 3 種の遮断を回帰確認する。dollar-quote 中和の回帰は <code>test/guard.test.ts</code> と <code>test/preprocess.test.ts</code> に追加されている。</p>
+    </div>
+  </section>
+
+  <!-- ============== §8 懸念点 ============== -->
+  <section id="concern">
+    <h2><span class="num">8.</span>懸念点 <span class="sev"><span class="dot med"></span><span class="lbl-med">未決</span></span></h2>
+
+    <div class="concern-card">
+      <p class="name">CI workflow が未設定</p>
+      <p class="impact">Impact: <code>.github/workflows/</code> が無いため <code>bun test</code> が push/PR で走らない。今回の 48 件 + 今後のテストが手元実行頼みになる。</p>
+      <div class="options">
+        <strong>選択肢:</strong>
+        <ol style="margin:4px 0 0;padding-left:18px;">
+          <li>別 PR で最小限の workflow (<code>bun install</code> + <code>bun test</code>) を追加。本 PR のスコープに混ぜない</li>
+          <li>個人 dogfood なので CI 不要と判断し pre-commit / 開発者規律のみで運用</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="concern-card">
+      <p class="name">lint / format ツールが宣言と実体で乖離</p>
+      <p class="impact">Impact: <code>package.json</code> の scripts は <code>oxlint</code> / <code>oxfmt</code> を参照しているが、<code>mise</code> にも <code>node_modules</code> にも未インストールで <code>bun run lint</code> / <code>bun run format</code> は失敗する。</p>
+      <div class="options">
+        <strong>選択肢:</strong>
+        <ol style="margin:4px 0 0;padding-left:18px;">
+          <li><code>mise.toml</code> に <code>oxlint</code> / <code>oxfmt</code> を追加し global install する。scripts はそのまま動く</li>
+          <li>scripts を biome / dprint 等の bun 経由で動くツールに差し替えて選択肢を狭める</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<script>
+  const links = Array.from(document.querySelectorAll('.toc a'));
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = map.get(e.target.id);
+        if (a) a.classList.add('active');
+      }
+    });
+  }, { rootMargin: '0px 0px -72% 0px', threshold: 0 });
+  document.querySelectorAll('main section[id]').forEach(s => obs.observe(s));
+</script>
+
+</body>
+</html>
